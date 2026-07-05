@@ -94,12 +94,17 @@ local function tween(obj, props, time, style, dir)
 end
 
 local function makeDraggable(dragHandle, target)
-	local dragging, dragStart, startPos
+	-- Tracks mouse/touch movement globally (not just over the handle) so fast
+	-- mouse movement never "escapes" the handle and drops the drag.
+	local dragging = false
+	local dragInput, dragStart, startPos
+
 	dragHandle.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
 			dragStart = input.Position
 			startPos = target.Position
+
 			input.Changed:Connect(function()
 				if input.UserInputState == Enum.UserInputState.End then
 					dragging = false
@@ -107,8 +112,15 @@ local function makeDraggable(dragHandle, target)
 			end)
 		end
 	end)
+
 	dragHandle.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and input == dragInput then
 			local delta = input.Position - dragStart
 			target.Position = UDim2.new(
 				startPos.X.Scale, startPos.X.Offset + delta.X,
@@ -199,7 +211,7 @@ function Vibe:CreateWindow(config)
 	})
 
 	local closeBtn = new("TextButton", {
-		Text = "×",
+		Text = "X",
 		Font = Theme.FontBold,
 		TextSize = 20,
 		TextColor3 = Theme.SubText,
@@ -259,10 +271,34 @@ function Vibe:CreateWindow(config)
 		Parent = notifHolder,
 	})
 
-	-- toggle visibility keybind
+	-- Overlay: a full-screen, top-level layer used for things that must never
+	-- be clipped by a ScrollingFrame (currently: open dropdown lists).
+	local overlay = new("Frame", {
+		Name = "Overlay",
+		BackgroundTransparency = 1,
+		Size = UDim2.fromScale(1, 1),
+		ZIndex = 100,
+		Parent = screenGui,
+	})
+
+	-- Invisible full-screen button that sits just under any open dropdown list.
+	-- Clicking anywhere outside the list hits this and closes it.
+	local dropdownCatcher = new("TextButton", {
+		Name = "DropdownCatcher",
+		Text = "",
+		AutoButtonColor = false,
+		BackgroundTransparency = 1,
+		Size = UDim2.fromScale(1, 1),
+		Visible = false,
+		ZIndex = 99,
+		Parent = overlay,
+	})
+
+	-- toggle visibility keybind(s). Delete always works as a failsafe hide/show,
+	-- in addition to whatever custom ToggleKey was configured.
 	UserInputService.InputBegan:Connect(function(input, gpe)
 		if gpe then return end
-		if input.KeyCode == toggleKey then
+		if input.KeyCode == toggleKey or input.KeyCode == Enum.KeyCode.Delete then
 			main.Visible = not main.Visible
 		end
 	end)
@@ -273,9 +309,18 @@ function Vibe:CreateWindow(config)
 		Sidebar = sidebar,
 		ContentHolder = contentHolder,
 		NotifHolder = notifHolder,
+		Overlay = overlay,
+		DropdownCatcher = dropdownCatcher,
 		Tabs = {},
 		_firstTab = true,
+		_closeOpenDropdown = nil,
 	}, Vibe)
+
+	dropdownCatcher.MouseButton1Click:Connect(function()
+		if self._closeOpenDropdown then
+			self._closeOpenDropdown()
+		end
+	end)
 
 	return self
 end
@@ -695,8 +740,9 @@ function Tab:Dropdown(config)
 	local default = config.Default
 	local callback = config.Callback or function() end
 
+	local window = self._window
+
 	local card = baseCard(self.Page, 40)
-	card.ClipsDescendants = false
 
 	new("TextLabel", {
 		Text = text,
@@ -722,9 +768,11 @@ function Tab:Dropdown(config)
 		Parent = card,
 	})
 
+	-- "v" / "^" instead of unicode triangles: those glyphs aren't included in
+	-- Roblox's built-in fonts and render as blank boxes.
 	local arrow = new("TextLabel", {
-		Text = "▾",
-		Font = Theme.Font,
+		Text = "v",
+		Font = Theme.FontBold,
 		TextSize = 13,
 		TextColor3 = Theme.SubText,
 		BackgroundTransparency = 1,
@@ -740,23 +788,46 @@ function Tab:Dropdown(config)
 		Parent = card,
 	})
 
+	-- The option list lives in the window's top-level Overlay, NOT inside the
+	-- scrolling tab content, so it is never clipped and always renders fully
+	-- on top regardless of where the card sits in the scroll view.
 	local list = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 0),
-		Position = UDim2.new(0, 0, 1, 6),
+		Name = "DropdownList",
 		BackgroundColor3 = Theme.PanelLight,
 		Visible = false,
 		ClipsDescendants = true,
-		ZIndex = 5,
-		Parent = card,
+		ZIndex = 100,
+		Parent = window.Overlay,
 	})
 	corner(list, 8)
 	stroke(list, Theme.Stroke, 1)
-	local listLayout = new("UIListLayout", {
+	new("UIListLayout", {
 		SortOrder = Enum.SortOrder.LayoutOrder,
 		Parent = list,
 	})
 
 	local open = false
+	local ROW_HEIGHT = 30
+	local MAX_VISIBLE = 5
+
+	local function closeDropdown()
+		if not open then return end
+		open = false
+		arrow.Text = "v"
+		tween(list, { Size = UDim2.new(0, list.AbsoluteSize.X, 0, 0) }, 0.15)
+		window.DropdownCatcher.Visible = false
+		window._closeOpenDropdown = nil
+		task.delay(0.16, function()
+			if not open then list.Visible = false end
+		end)
+	end
+
+	local function positionList()
+		local absPos = card.AbsolutePosition
+		local absSize = card.AbsoluteSize
+		list.Position = UDim2.fromOffset(absPos.X, absPos.Y + absSize.Y + 6)
+		list.Size = UDim2.new(0, absSize.X, 0, list.Size.Y.Offset)
+	end
 
 	local function buildOptions(opts)
 		for _, child in ipairs(list:GetChildren()) do
@@ -769,17 +840,15 @@ function Tab:Dropdown(config)
 				TextSize = 13,
 				TextColor3 = Theme.Text,
 				BackgroundTransparency = 1,
-				Size = UDim2.new(1, 0, 0, 30),
+				Size = UDim2.new(1, 0, 0, ROW_HEIGHT),
+				ZIndex = 101,
 				Parent = list,
 			})
 			optBtn.MouseEnter:Connect(function() tween(optBtn, { BackgroundTransparency = 0.85, BackgroundColor3 = Theme.Accent }, 0.1) end)
 			optBtn.MouseLeave:Connect(function() tween(optBtn, { BackgroundTransparency = 1 }, 0.1) end)
 			optBtn.MouseButton1Click:Connect(function()
 				selectedLabel.Text = tostring(opt)
-				open = false
-				list.Visible = false
-				list.Size = UDim2.new(1, 0, 0, 0)
-				arrow.Text = "▾"
+				closeDropdown()
 				local ok, err = pcall(callback, opt)
 				if not ok then warn("[Vibe] Dropdown callback error: " .. tostring(err)) end
 			end)
@@ -789,11 +858,24 @@ function Tab:Dropdown(config)
 	buildOptions(options)
 
 	clickArea.MouseButton1Click:Connect(function()
-		open = not open
-		list.Visible = open
-		arrow.Text = open and "▴" or "▾"
-		local target = open and math.min(#options, 5) * 30 or 0
-		tween(list, { Size = UDim2.new(1, 0, 0, target) }, 0.15)
+		if open then
+			closeDropdown()
+			return
+		end
+		-- close any other dropdown that's currently open first
+		if window._closeOpenDropdown then
+			window._closeOpenDropdown()
+		end
+
+		open = true
+		positionList()
+		list.Visible = true
+		arrow.Text = "^"
+		window.DropdownCatcher.Visible = true
+		window._closeOpenDropdown = closeDropdown
+
+		local target = math.min(#options, MAX_VISIBLE) * ROW_HEIGHT
+		tween(list, { Size = UDim2.new(0, card.AbsoluteSize.X, 0, target) }, 0.15)
 	end)
 
 	if default then
