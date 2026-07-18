@@ -1,6 +1,6 @@
 --[[
-	Vibe UI Library
-	A clean, minimal UI library for Roblox scripts / executors.
+	Vibe UI Library (v2 — "polish" pass)
+	A clean, modern UI library for Roblox scripts / executors.
 
 	Usage:
 		local Vibe = loadstring(game:HttpGet("https://raw.githubusercontent.com/<you>/<repo>/main/Vibe.lua"))()
@@ -11,18 +11,26 @@
 			ToggleKey = Enum.KeyCode.RightControl,
 		})
 
-		local Tab = Window:Tab("Main")
+		local Tab = Window:Tab("Main", "rbxassetid://7733960981") -- icon is optional
 
 		Tab:Button({ Text = "Print Hello", Callback = function() print("hello") end })
 		Tab:Toggle({ Text = "God Mode", Default = false, Callback = function(v) print(v) end })
 
+	Same public API as v1 — this pass is purely visual/UX polish:
+		- soft drop shadows on the window, dropdown, and notifications
+		- gradient accent (indigo -> violet) instead of a flat accent color
+		- animated left-edge indicator + icon support on tabs
+		- glowing / springier toggle and slider
+		- nicer dropdown with checkmarks and hover highlight
+		- notification variants (Info / Success / Warn / Error) with colored edge
+		- consistent 1px hairline strokes + subtle elevation everywhere
+
 	MIT License. Do whatever you want with it.
 ]]
 
-local TweenService   = game:GetService("TweenService")
+local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
-local Players        = game:GetService("Players")
-local RunService      = game:GetService("RunService")
+local Players          = game:GetService("Players")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -31,18 +39,32 @@ local LocalPlayer = Players.LocalPlayer
 --------------------------------------------------------------------
 
 local Theme = {
-	Background = Color3.fromRGB(22, 22, 26),
-	Panel      = Color3.fromRGB(29, 29, 34),
-	PanelLight = Color3.fromRGB(36, 36, 42),
-	Stroke     = Color3.fromRGB(48, 48, 55),
-	Text       = Color3.fromRGB(235, 235, 240),
-	SubText    = Color3.fromRGB(150, 150, 160),
-	Accent     = Color3.fromRGB(120, 130, 255),
-	AccentDim  = Color3.fromRGB(80, 88, 190),
-	Good       = Color3.fromRGB(90, 200, 130),
-	Bad        = Color3.fromRGB(230, 90, 90),
-	Font       = Enum.Font.GothamMedium,
-	FontBold   = Enum.Font.GothamBold,
+	Background   = Color3.fromRGB(17, 17, 21),
+	Panel        = Color3.fromRGB(24, 24, 29),
+	PanelLight   = Color3.fromRGB(31, 31, 38),
+	PanelLighter = Color3.fromRGB(40, 40, 48),
+	Stroke       = Color3.fromRGB(44, 44, 52),
+	StrokeSoft   = Color3.fromRGB(36, 36, 43),
+	Text         = Color3.fromRGB(240, 240, 245),
+	SubText      = Color3.fromRGB(146, 146, 158),
+	Muted        = Color3.fromRGB(100, 100, 112),
+
+	AccentA      = Color3.fromRGB(129, 111, 255), -- violet
+	AccentB      = Color3.fromRGB(92, 143, 255),  -- blue
+	Accent       = Color3.fromRGB(120, 128, 255),
+	AccentDim    = Color3.fromRGB(70, 76, 150),
+
+	Good         = Color3.fromRGB(88, 210, 140),
+	Warn         = Color3.fromRGB(240, 185, 90),
+	Bad          = Color3.fromRGB(235, 95, 100),
+	Info         = Color3.fromRGB(100, 160, 255),
+
+	Font         = Enum.Font.GothamMedium,
+	FontBold     = Enum.Font.GothamBold,
+	FontSemi     = Enum.Font.GothamSemibold,
+
+	ShadowImage  = "rbxassetid://6014261993", -- soft 9-slice shadow
+	CheckImage   = "rbxassetid://6031094667", -- generic checkmark
 }
 
 --------------------------------------------------------------------
@@ -66,11 +88,21 @@ local function corner(parent, radius)
 	return new("UICorner", { CornerRadius = UDim.new(0, radius or 8), Parent = parent })
 end
 
-local function stroke(parent, color, thickness)
+local function stroke(parent, color, thickness, transparency)
 	return new("UIStroke", {
 		Color = color or Theme.Stroke,
 		Thickness = thickness or 1,
+		Transparency = transparency or 0,
 		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+		Parent = parent,
+	})
+end
+
+local function gradient(parent, colorSeq, rotation, transparencySeq)
+	return new("UIGradient", {
+		Color = colorSeq,
+		Rotation = rotation or 0,
+		Transparency = transparencySeq,
 		Parent = parent,
 	})
 end
@@ -83,10 +115,38 @@ local function padding(parent, all)
 	})
 end
 
+-- Soft elevation shadow behind any GuiObject. Sits one layer back and scales
+-- with the parent's size, so cards/panels can just call addShadow(self).
+local function addShadow(parent, transparency, sizeOffset)
+	local shadow = new("ImageLabel", {
+		Name = "Shadow",
+		Image = Theme.ShadowImage,
+		ImageColor3 = Color3.new(0, 0, 0),
+		ImageTransparency = transparency or 0.55,
+		ScaleType = Enum.ScaleType.Slice,
+		SliceCenter = Rect.new(49, 49, 450, 450),
+		BackgroundTransparency = 1,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.new(0.5, 0, 0.5, 2),
+		Size = UDim2.new(1, sizeOffset or 26, 1, sizeOffset or 26),
+		ZIndex = parent.ZIndex - 1 >= 0 and parent.ZIndex - 1 or 0,
+		Parent = parent,
+	})
+	return shadow
+end
+
+-- Accent gradient sequence reused across fills (buttons, switches, sliders).
+local function accentGradient(parent, rotation)
+	return gradient(parent, ColorSequence.new(Theme.AccentA, Theme.AccentB), rotation or 45)
+end
+
+local EASE_OUT   = Enum.EasingStyle.Quint
+local EASE_POP   = Enum.EasingStyle.Back
+
 local function tween(obj, props, time, style, dir)
 	local t = TweenService:Create(
 		obj,
-		TweenInfo.new(time or 0.18, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out),
+		TweenInfo.new(time or 0.18, style or EASE_OUT, dir or Enum.EasingDirection.Out),
 		props
 	)
 	t:Play()
@@ -159,32 +219,54 @@ function Vibe:CreateWindow(config)
 
 	local main = new("Frame", {
 		Name = "Main",
-		Size = UDim2.fromOffset(560, 360),
-		Position = UDim2.new(0.5, -280, 0.5, -180),
+		Size = UDim2.fromOffset(580, 380),
+		Position = UDim2.new(0.5, -290, 0.5, -190),
 		BackgroundColor3 = Theme.Background,
 		BorderSizePixel = 0,
+		ClipsDescendants = true,
 		Parent = screenGui,
 	})
-	corner(main, 10)
+	corner(main, 12)
 	stroke(main, Theme.Stroke, 1)
+	addShadow(main, 0.5, 40)
 
 	-- Top bar
 	local topBar = new("Frame", {
 		Name = "TopBar",
-		Size = UDim2.new(1, 0, 0, 46),
+		Size = UDim2.new(1, 0, 0, 50),
 		BackgroundColor3 = Theme.Panel,
 		BorderSizePixel = 0,
 		Parent = main,
 	})
-	corner(topBar, 10)
+	corner(topBar, 12)
 	-- mask the bottom corners of the topbar so it looks flush
 	new("Frame", {
-		Size = UDim2.new(1, 0, 0, 12),
-		Position = UDim2.new(0, 0, 1, -12),
+		Size = UDim2.new(1, 0, 0, 14),
+		Position = UDim2.new(0, 0, 1, -14),
 		BackgroundColor3 = Theme.Panel,
 		BorderSizePixel = 0,
 		Parent = topBar,
 	})
+	-- thin gradient accent line under the top bar
+	new("Frame", {
+		Name = "AccentLine",
+		Size = UDim2.new(1, 0, 0, 2),
+		Position = UDim2.new(0, 0, 1, 0),
+		BorderSizePixel = 0,
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = topBar,
+	}).BackgroundTransparency = 0
+	accentGradient(topBar:FindFirstChild("AccentLine"), 0)
+
+	-- small logo dot with accent gradient
+	local logoDot = new("Frame", {
+		Size = UDim2.fromOffset(10, 10),
+		Position = UDim2.fromOffset(18, 20),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = topBar,
+	})
+	corner(logoDot, 5)
+	accentGradient(logoDot, 90)
 
 	new("TextLabel", {
 		Text = title,
@@ -193,8 +275,8 @@ function Vibe:CreateWindow(config)
 		TextColor3 = Theme.Text,
 		BackgroundTransparency = 1,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Position = UDim2.fromOffset(16, 6),
-		Size = UDim2.new(1, -100, 0, 20),
+		Position = UDim2.fromOffset(36, 8),
+		Size = UDim2.new(1, -120, 0, 20),
 		Parent = topBar,
 	})
 
@@ -205,37 +287,53 @@ function Vibe:CreateWindow(config)
 		TextColor3 = Theme.SubText,
 		BackgroundTransparency = 1,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Position = UDim2.fromOffset(16, 24),
-		Size = UDim2.new(1, -100, 0, 16),
+		Position = UDim2.fromOffset(36, 27),
+		Size = UDim2.new(1, -120, 0, 16),
 		Parent = topBar,
 	})
 
 	local closeBtn = new("TextButton", {
-		Text = "X",
+		Text = "\226\156\149", -- ✕
 		Font = Theme.FontBold,
-		TextSize = 20,
+		TextSize = 15,
 		TextColor3 = Theme.SubText,
+		BackgroundColor3 = Theme.PanelLight,
 		BackgroundTransparency = 1,
-		Size = UDim2.fromOffset(36, 36),
-		Position = UDim2.new(1, -42, 0, 5),
+		AutoButtonColor = false,
+		Size = UDim2.fromOffset(30, 30),
+		Position = UDim2.new(1, -40, 0.5, -15),
 		Parent = topBar,
 	})
+	corner(closeBtn, 8)
 	closeBtn.MouseButton1Click:Connect(function()
-		main.Visible = false
+		tween(main, { Size = UDim2.fromOffset(main.Size.X.Offset, 0) }, 0.18)
+		task.delay(0.18, function() main.Visible = false; main.Size = UDim2.fromOffset(580, 380) end)
 	end)
-	closeBtn.MouseEnter:Connect(function() tween(closeBtn, { TextColor3 = Theme.Bad }, 0.12) end)
-	closeBtn.MouseLeave:Connect(function() tween(closeBtn, { TextColor3 = Theme.SubText }, 0.12) end)
+	closeBtn.MouseEnter:Connect(function()
+		tween(closeBtn, { BackgroundTransparency = 0, TextColor3 = Theme.Text, BackgroundColor3 = Theme.Bad }, 0.12)
+	end)
+	closeBtn.MouseLeave:Connect(function()
+		tween(closeBtn, { BackgroundTransparency = 1, TextColor3 = Theme.SubText }, 0.12)
+	end)
 
 	makeDraggable(topBar, main)
 
 	-- Sidebar (tab list)
 	local sidebar = new("Frame", {
 		Name = "Sidebar",
-		Size = UDim2.new(0, 140, 1, -46),
-		Position = UDim2.new(0, 0, 0, 46),
+		Size = UDim2.new(0, 150, 1, -50),
+		Position = UDim2.new(0, 0, 0, 50),
 		BackgroundColor3 = Theme.Panel,
 		BorderSizePixel = 0,
 		Parent = main,
+	})
+	-- hairline divider between sidebar and content
+	new("Frame", {
+		Size = UDim2.new(0, 1, 1, 0),
+		Position = UDim2.new(1, -1, 0, 0),
+		BackgroundColor3 = Theme.StrokeSoft,
+		BorderSizePixel = 0,
+		Parent = sidebar,
 	})
 
 	local tabList = new("UIListLayout", {
@@ -243,13 +341,13 @@ function Vibe:CreateWindow(config)
 		SortOrder = Enum.SortOrder.LayoutOrder,
 		Parent = sidebar,
 	})
-	padding(sidebar, 8)
+	padding(sidebar, 10)
 
 	-- Content area
 	local contentHolder = new("Frame", {
 		Name = "Content",
-		Size = UDim2.new(1, -140, 1, -46),
-		Position = UDim2.new(0, 140, 0, 46),
+		Size = UDim2.new(1, -150, 1, -50),
+		Position = UDim2.new(0, 150, 0, 50),
 		BackgroundTransparency = 1,
 		Parent = main,
 	})
@@ -259,7 +357,7 @@ function Vibe:CreateWindow(config)
 		Name = "Notifications",
 		AnchorPoint = Vector2.new(1, 1),
 		Position = UDim2.new(1, -16, 1, -16),
-		Size = UDim2.fromOffset(280, 400),
+		Size = UDim2.fromOffset(300, 420),
 		BackgroundTransparency = 1,
 		Parent = screenGui,
 	})
@@ -299,9 +397,20 @@ function Vibe:CreateWindow(config)
 	UserInputService.InputBegan:Connect(function(input, gpe)
 		if gpe then return end
 		if input.KeyCode == toggleKey or input.KeyCode == Enum.KeyCode.Delete then
-			main.Visible = not main.Visible
+			if main.Visible then
+				tween(main, { Size = UDim2.fromOffset(580, 0) }, 0.16)
+				task.delay(0.16, function() main.Visible = false; main.Size = UDim2.fromOffset(580, 380) end)
+			else
+				main.Visible = true
+				main.Size = UDim2.fromOffset(580, 0)
+				tween(main, { Size = UDim2.fromOffset(580, 380) }, 0.2, EASE_POP)
+			end
 		end
 	end)
+
+	-- gentle entrance animation
+	main.Size = UDim2.fromOffset(580, 0)
+	tween(main, { Size = UDim2.fromOffset(580, 380) }, 0.25, EASE_POP)
 
 	local self = setmetatable({
 		ScreenGui = screenGui,
@@ -325,28 +434,53 @@ function Vibe:CreateWindow(config)
 	return self
 end
 
+local NOTIF_STYLES = {
+	Info    = Theme.Info,
+	Success = Theme.Good,
+	Warn    = Theme.Warn,
+	Error   = Theme.Bad,
+}
+
 function Vibe:Notify(config)
 	config = config or {}
 	local title = config.Title or "Notification"
 	local text = config.Text or ""
 	local duration = config.Duration or 3.5
+	local kind = config.Type or "Info"
+	local edgeColor = NOTIF_STYLES[kind] or Theme.Info
 
 	local notif = new("Frame", {
 		Size = UDim2.new(1, 0, 0, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
 		BackgroundColor3 = Theme.Panel,
 		BorderSizePixel = 0,
+		ClipsDescendants = true,
 		LayoutOrder = -os.clock(),
 		Parent = self.NotifHolder,
 	})
-	corner(notif, 8)
+	corner(notif, 10)
 	stroke(notif, Theme.Stroke, 1)
-	padding(notif, 12)
+	addShadow(notif, 0.6, 20)
+
+	new("Frame", { -- colored edge indicator
+		Size = UDim2.new(0, 3, 1, 0),
+		BackgroundColor3 = edgeColor,
+		BorderSizePixel = 0,
+		Parent = notif,
+	})
+
+	local inner = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 0),
+		AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1,
+		Parent = notif,
+	})
+	padding(inner, 12)
 
 	new("UIListLayout", {
 		Padding = UDim.new(0, 2),
 		SortOrder = Enum.SortOrder.LayoutOrder,
-		Parent = notif,
+		Parent = inner,
 	})
 
 	new("TextLabel", {
@@ -358,7 +492,7 @@ function Vibe:Notify(config)
 		TextXAlignment = Enum.TextXAlignment.Left,
 		Size = UDim2.new(1, 0, 0, 18),
 		AutomaticSize = Enum.AutomaticSize.Y,
-		Parent = notif,
+		Parent = inner,
 	})
 
 	new("TextLabel", {
@@ -371,16 +505,17 @@ function Vibe:Notify(config)
 		TextWrapped = true,
 		Size = UDim2.new(1, 0, 0, 0),
 		AutomaticSize = Enum.AutomaticSize.Y,
-		Parent = notif,
+		Parent = inner,
 	})
 
 	notif.BackgroundTransparency = 1
-	tween(notif, { BackgroundTransparency = 0 }, 0.2)
+	notif.Position = UDim2.new(0, 30, 0, 0)
+	tween(notif, { BackgroundTransparency = 0, Position = UDim2.new(0, 0, 0, 0) }, 0.22, EASE_POP)
 
 	task.delay(duration, function()
 		if notif and notif.Parent then
-			tween(notif, { BackgroundTransparency = 1 }, 0.25)
-			task.wait(0.25)
+			tween(notif, { BackgroundTransparency = 1, Position = UDim2.new(0, 30, 0, 0) }, 0.2)
+			task.wait(0.2)
 			notif:Destroy()
 		end
 	end)
@@ -393,20 +528,57 @@ end
 local Tab = {}
 Tab.__index = Tab
 
-function Vibe:CreateTab(name)
+function Vibe:CreateTab(name, icon)
 	name = name or "Tab"
 
 	local btn = new("TextButton", {
-		Text = name,
-		Font = Theme.Font,
-		TextSize = 14,
-		TextColor3 = Theme.SubText,
-		BackgroundColor3 = Theme.PanelLight,
+		Name = name .. "TabButton",
+		Text = "",
+		AutoButtonColor = false,
+		BackgroundColor3 = Theme.PanelLighter,
 		BackgroundTransparency = 1,
-		Size = UDim2.new(1, 0, 0, 34),
+		Size = UDim2.new(1, 0, 0, 36),
 		Parent = self.Sidebar,
 	})
-	corner(btn, 6)
+	corner(btn, 8)
+
+	-- animated left accent indicator
+	local indicator = new("Frame", {
+		Name = "Indicator",
+		Size = UDim2.new(0, 3, 0, 0),
+		AnchorPoint = Vector2.new(0, 0.5),
+		Position = UDim2.new(0, 0, 0.5, 0),
+		BackgroundColor3 = Color3.new(1, 1, 1),
+		BorderSizePixel = 0,
+		Parent = btn,
+	})
+	corner(indicator, 2)
+	accentGradient(indicator, 90)
+
+	local iconOffset = icon and 34 or 14
+	local iconImg
+	if icon then
+		iconImg = new("ImageLabel", {
+			Image = icon,
+			BackgroundTransparency = 1,
+			ImageColor3 = Theme.SubText,
+			Size = UDim2.fromOffset(16, 16),
+			Position = UDim2.fromOffset(12, 10),
+			Parent = btn,
+		})
+	end
+
+	local label = new("TextLabel", {
+		Text = name,
+		Font = Theme.Font,
+		TextSize = 13,
+		TextColor3 = Theme.SubText,
+		BackgroundTransparency = 1,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		Position = UDim2.fromOffset(iconOffset, 0),
+		Size = UDim2.new(1, -iconOffset - 10, 1, 0),
+		Parent = btn,
+	})
 
 	local page = new("ScrollingFrame", {
 		Name = name .. "Page",
@@ -420,8 +592,8 @@ function Vibe:CreateTab(name)
 		Visible = false,
 		Parent = self.ContentHolder,
 	})
-	padding(page, 14)
-	local layout = new("UIListLayout", {
+	padding(page, 16)
+	new("UIListLayout", {
 		Padding = UDim.new(0, 8),
 		SortOrder = Enum.SortOrder.LayoutOrder,
 		Parent = page,
@@ -430,6 +602,9 @@ function Vibe:CreateTab(name)
 	local tabObj = setmetatable({
 		Button = btn,
 		Page = page,
+		Indicator = indicator,
+		Icon = iconImg,
+		Label = label,
 		_window = self,
 	}, Tab)
 
@@ -438,12 +613,24 @@ function Vibe:CreateTab(name)
 	local function selectTab()
 		for _, t in ipairs(self.Tabs) do
 			t.Page.Visible = false
-			tween(t.Button, { TextColor3 = Theme.SubText, BackgroundTransparency = 1 }, 0.15)
+			tween(t.Button, { BackgroundTransparency = 1 }, 0.15)
+			tween(t.Label, { TextColor3 = Theme.SubText }, 0.15)
+			tween(t.Indicator, { Size = UDim2.new(0, 3, 0, 0) }, 0.15)
+			if t.Icon then tween(t.Icon, { ImageColor3 = Theme.SubText }, 0.15) end
 		end
 		page.Visible = true
-		tween(btn, { TextColor3 = Theme.Text, BackgroundTransparency = 0 }, 0.15)
+		tween(btn, { BackgroundTransparency = 0 }, 0.15)
+		tween(label, { TextColor3 = Theme.Text }, 0.15)
+		tween(indicator, { Size = UDim2.new(0, 3, 0, 18) }, 0.18, EASE_POP)
+		if iconImg then tween(iconImg, { ImageColor3 = Theme.Accent }, 0.15) end
 	end
 
+	btn.MouseEnter:Connect(function()
+		if not page.Visible then tween(btn, { BackgroundTransparency = 0.6 }, 0.12) end
+	end)
+	btn.MouseLeave:Connect(function()
+		if not page.Visible then tween(btn, { BackgroundTransparency = 1 }, 0.12) end
+	end)
 	btn.MouseButton1Click:Connect(selectTab)
 
 	if self._firstTab then
@@ -454,7 +641,7 @@ function Vibe:CreateTab(name)
 	return tabObj
 end
 
-Vibe.Tab = Vibe.CreateTab -- alias: Window:Tab("Main") == Window:CreateTab("Main")
+Vibe.Tab = Vibe.CreateTab -- alias: Window:Tab("Main", icon) == Window:CreateTab("Main", icon)
 
 --------------------------------------------------------------------
 -- ELEMENT: Section (visual grouping, optional)
@@ -467,25 +654,33 @@ local function baseCard(parent, height)
 		BorderSizePixel = 0,
 		Parent = parent,
 	})
-	corner(card, 8)
+	corner(card, 9)
 	stroke(card, Theme.Stroke, 1)
 	return card
 end
 
 function Tab:Section(title)
 	local holder = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 24),
+		Size = UDim2.new(1, 0, 0, 26),
 		BackgroundTransparency = 1,
 		Parent = self.Page,
 	})
+	local dot = new("Frame", {
+		Size = UDim2.fromOffset(4, 4),
+		Position = UDim2.new(0, 0, 0.5, -2),
+		BackgroundColor3 = Theme.Muted,
+		Parent = holder,
+	})
+	corner(dot, 2)
 	new("TextLabel", {
-		Text = title,
-		Font = Theme.FontBold,
-		TextSize = 13,
-		TextColor3 = Theme.SubText,
+		Text = string.upper(title),
+		Font = Theme.FontSemi,
+		TextSize = 11,
+		TextColor3 = Theme.Muted,
 		BackgroundTransparency = 1,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Size = UDim2.new(1, 0, 1, 0),
+		Position = UDim2.fromOffset(12, 0),
+		Size = UDim2.new(1, -12, 1, 0),
 		Parent = holder,
 	})
 	return holder
@@ -524,24 +719,25 @@ function Tab:Button(config)
 	local text = config.Text or "Button"
 	local callback = config.Callback or function() end
 
-	local card = baseCard(self.Page, 40)
+	local card = baseCard(self.Page, 42)
 
 	local btn = new("TextButton", {
 		Text = text,
-		Font = Theme.Font,
+		Font = Theme.FontSemi,
 		TextSize = 13,
 		TextColor3 = Theme.Text,
+		AutoButtonColor = false,
 		BackgroundTransparency = 1,
 		Size = UDim2.new(1, 0, 1, 0),
 		Parent = card,
 	})
 
-	btn.MouseEnter:Connect(function() tween(card, { BackgroundColor3 = Theme.PanelLight }, 0.12) end)
+	btn.MouseEnter:Connect(function() tween(card, { BackgroundColor3 = Theme.PanelLighter }, 0.12) end)
 	btn.MouseLeave:Connect(function() tween(card, { BackgroundColor3 = Theme.Panel }, 0.12) end)
 	btn.MouseButton1Click:Connect(function()
-		tween(card, { BackgroundColor3 = Theme.AccentDim }, 0.08)
-		task.delay(0.1, function()
-			tween(card, { BackgroundColor3 = Theme.Panel }, 0.15)
+		tween(card, { BackgroundColor3 = Theme.AccentDim }, 0.06)
+		task.delay(0.09, function()
+			tween(card, { BackgroundColor3 = Theme.Panel }, 0.18)
 		end)
 		local ok, err = pcall(callback)
 		if not ok then warn("[Vibe] Button callback error: " .. tostring(err)) end
@@ -560,7 +756,7 @@ function Tab:Toggle(config)
 	local default = config.Default or false
 	local callback = config.Callback or function() end
 
-	local card = baseCard(self.Page, 40)
+	local card = baseCard(self.Page, 42)
 
 	new("TextLabel", {
 		Text = text,
@@ -569,45 +765,51 @@ function Tab:Toggle(config)
 		TextColor3 = Theme.Text,
 		BackgroundTransparency = 1,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Size = UDim2.new(1, -70, 1, 0),
+		Size = UDim2.new(1, -74, 1, 0),
 		Position = UDim2.fromOffset(12, 0),
 		Parent = card,
 	})
 
 	local switchBg = new("Frame", {
-		Size = UDim2.fromOffset(40, 22),
-		Position = UDim2.new(1, -52, 0.5, -11),
-		BackgroundColor3 = default and Theme.Accent or Theme.PanelLight,
+		Size = UDim2.fromOffset(42, 24),
+		Position = UDim2.new(1, -54, 0.5, -12),
+		BackgroundColor3 = default and Theme.AccentB or Theme.PanelLighter,
 		Parent = card,
 	})
-	corner(switchBg, 11)
+	corner(switchBg, 12)
 	stroke(switchBg, Theme.Stroke, 1)
+	if default then accentGradient(switchBg, 0) end
 
 	local knob = new("Frame", {
-		Size = UDim2.fromOffset(16, 16),
-		Position = default and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8),
+		Size = UDim2.fromOffset(18, 18),
+		Position = default and UDim2.new(1, -21, 0.5, -9) or UDim2.new(0, 3, 0.5, -9),
 		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
 		Parent = switchBg,
 	})
-	corner(knob, 8)
+	corner(knob, 9)
+	addShadow(knob, 0.75, 10)
 
 	local clickArea = new("TextButton", {
 		Text = "",
+		AutoButtonColor = false,
 		BackgroundTransparency = 1,
 		Size = UDim2.new(1, 0, 1, 0),
 		Parent = card,
 	})
 
 	local state = default
+	local grad = switchBg:FindFirstChildOfClass("UIGradient")
 
 	local function set(value, fire)
 		state = value
 		if state then
-			tween(switchBg, { BackgroundColor3 = Theme.Accent }, 0.15)
-			tween(knob, { Position = UDim2.new(1, -19, 0.5, -8) }, 0.15)
+			if not grad then grad = accentGradient(switchBg, 0) end
+			tween(switchBg, { BackgroundColor3 = Theme.AccentB }, 0.15)
+			tween(knob, { Position = UDim2.new(1, -21, 0.5, -9) }, 0.16, EASE_POP)
 		else
-			tween(switchBg, { BackgroundColor3 = Theme.PanelLight }, 0.15)
-			tween(knob, { Position = UDim2.new(0, 3, 0.5, -8) }, 0.15)
+			if grad then grad:Destroy(); grad = nil end
+			tween(switchBg, { BackgroundColor3 = Theme.PanelLighter }, 0.15)
+			tween(knob, { Position = UDim2.new(0, 3, 0.5, -9) }, 0.16, EASE_POP)
 		end
 		if fire ~= false then
 			local ok, err = pcall(callback, state)
@@ -620,7 +822,7 @@ function Tab:Toggle(config)
 	end)
 
 	if default then
-		local ok = pcall(callback, default)
+		pcall(callback, default)
 	end
 
 	return {
@@ -640,9 +842,10 @@ function Tab:Slider(config)
 	local max = config.Max or 100
 	local default = math.clamp(config.Default or min, min, max)
 	local decimals = config.Decimals or 0
+	local suffix = config.Suffix or ""
 	local callback = config.Callback or function() end
 
-	local card = baseCard(self.Page, 50)
+	local card = baseCard(self.Page, 52)
 
 	new("TextLabel", {
 		Text = text,
@@ -651,27 +854,27 @@ function Tab:Slider(config)
 		TextColor3 = Theme.Text,
 		BackgroundTransparency = 1,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Size = UDim2.new(1, -80, 0, 20),
-		Position = UDim2.fromOffset(12, 4),
+		Size = UDim2.new(1, -90, 0, 20),
+		Position = UDim2.fromOffset(12, 6),
 		Parent = card,
 	})
 
 	local valueLabel = new("TextLabel", {
-		Text = tostring(default),
+		Text = tostring(default) .. suffix,
 		Font = Theme.FontBold,
 		TextSize = 13,
 		TextColor3 = Theme.Accent,
 		BackgroundTransparency = 1,
 		TextXAlignment = Enum.TextXAlignment.Right,
-		Size = UDim2.fromOffset(60, 20),
-		Position = UDim2.new(1, -72, 0, 4),
+		Size = UDim2.fromOffset(70, 20),
+		Position = UDim2.new(1, -82, 0, 6),
 		Parent = card,
 	})
 
 	local track = new("Frame", {
 		Size = UDim2.new(1, -24, 0, 6),
-		Position = UDim2.fromOffset(12, 32),
-		BackgroundColor3 = Theme.PanelLight,
+		Position = UDim2.fromOffset(12, 34),
+		BackgroundColor3 = Theme.PanelLighter,
 		Parent = card,
 	})
 	corner(track, 3)
@@ -679,10 +882,23 @@ function Tab:Slider(config)
 	local fraction = (default - min) / (max - min)
 	local fill = new("Frame", {
 		Size = UDim2.new(fraction, 0, 1, 0),
-		BackgroundColor3 = Theme.Accent,
+		BackgroundColor3 = Color3.new(1, 1, 1),
 		Parent = track,
 	})
 	corner(fill, 3)
+	accentGradient(fill, 0)
+
+	-- draggable knob that rides the fill edge for a more tactile feel
+	local knob = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Size = UDim2.fromOffset(14, 14),
+		Position = UDim2.new(fraction, 0, 0.5, 0),
+		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+		ZIndex = 2,
+		Parent = track,
+	})
+	corner(knob, 7)
+	addShadow(knob, 0.7, 8)
 
 	local dragging = false
 
@@ -696,8 +912,10 @@ function Tab:Slider(config)
 	local function update(inputPos)
 		local relX = math.clamp((inputPos.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
 		local value = round(min + (max - min) * relX)
-		fill.Size = UDim2.new((value - min) / (max - min), 0, 1, 0)
-		valueLabel.Text = tostring(value)
+		local frac = (value - min) / (max - min)
+		fill.Size = UDim2.new(frac, 0, 1, 0)
+		knob.Position = UDim2.new(frac, 0, 0.5, 0)
+		valueLabel.Text = tostring(value) .. suffix
 		local ok, err = pcall(callback, value)
 		if not ok then warn("[Vibe] Slider callback error: " .. tostring(err)) end
 		return value
@@ -706,6 +924,7 @@ function Tab:Slider(config)
 	track.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = true
+			tween(knob, { Size = UDim2.fromOffset(18, 18) }, 0.12)
 			update(input.Position)
 		end
 	end)
@@ -716,6 +935,7 @@ function Tab:Slider(config)
 	end)
 	UserInputService.InputEnded:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			if dragging then tween(knob, { Size = UDim2.fromOffset(14, 14) }, 0.12) end
 			dragging = false
 		end
 	end)
@@ -723,8 +943,10 @@ function Tab:Slider(config)
 	return {
 		Set = function(_, value)
 			value = math.clamp(value, min, max)
-			fill.Size = UDim2.new((value - min) / (max - min), 0, 1, 0)
-			valueLabel.Text = tostring(value)
+			local frac = (value - min) / (max - min)
+			fill.Size = UDim2.new(frac, 0, 1, 0)
+			knob.Position = UDim2.new(frac, 0, 0.5, 0)
+			valueLabel.Text = tostring(value) .. suffix
 		end,
 	}
 end
@@ -742,7 +964,7 @@ function Tab:Dropdown(config)
 
 	local window = self._window
 
-	local card = baseCard(self.Page, 40)
+	local card = baseCard(self.Page, 42)
 
 	new("TextLabel", {
 		Text = text,
@@ -758,9 +980,9 @@ function Tab:Dropdown(config)
 
 	local selectedLabel = new("TextLabel", {
 		Text = default or "Select...",
-		Font = Theme.Font,
+		Font = Theme.FontSemi,
 		TextSize = 13,
-		TextColor3 = Theme.SubText,
+		TextColor3 = default and Theme.Accent or Theme.SubText,
 		BackgroundTransparency = 1,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		Size = UDim2.new(0.5, -30, 1, 0),
@@ -776,13 +998,14 @@ function Tab:Dropdown(config)
 		TextSize = 13,
 		TextColor3 = Theme.SubText,
 		BackgroundTransparency = 1,
-		Size = UDim2.fromOffset(20, 40),
+		Size = UDim2.fromOffset(20, 42),
 		Position = UDim2.new(1, -24, 0, 0),
 		Parent = card,
 	})
 
 	local clickArea = new("TextButton", {
 		Text = "",
+		AutoButtonColor = false,
 		BackgroundTransparency = 1,
 		Size = UDim2.new(1, 0, 1, 0),
 		Parent = card,
@@ -793,15 +1016,18 @@ function Tab:Dropdown(config)
 	-- on top regardless of where the card sits in the scroll view.
 	local list = new("Frame", {
 		Name = "DropdownList",
-		BackgroundColor3 = Theme.PanelLight,
+		BackgroundColor3 = Theme.PanelLighter,
 		Visible = false,
 		ClipsDescendants = true,
 		ZIndex = 100,
 		Parent = window.Overlay,
 	})
-	corner(list, 8)
+	corner(list, 9)
 	stroke(list, Theme.Stroke, 1)
+	addShadow(list, 0.55, 20)
+	local listPad = padding(list, 4)
 	new("UIListLayout", {
+		Padding = UDim.new(0, 2),
 		SortOrder = Enum.SortOrder.LayoutOrder,
 		Parent = list,
 	})
@@ -809,11 +1035,13 @@ function Tab:Dropdown(config)
 	local open = false
 	local ROW_HEIGHT = 30
 	local MAX_VISIBLE = 5
+	local selectedValue = default
 
 	local function closeDropdown()
 		if not open then return end
 		open = false
 		arrow.Text = "v"
+		tween(arrow, { Rotation = 0 }, 0.15)
 		tween(list, { Size = UDim2.new(0, list.AbsoluteSize.X, 0, 0) }, 0.15)
 		window.DropdownCatcher.Visible = false
 		window._closeOpenDropdown = nil
@@ -834,20 +1062,58 @@ function Tab:Dropdown(config)
 			if child:IsA("TextButton") then child:Destroy() end
 		end
 		for _, opt in ipairs(opts) do
+			local row = new("Frame", {
+				Size = UDim2.new(1, 0, 0, ROW_HEIGHT),
+				BackgroundTransparency = 1,
+				Parent = list,
+			})
+			corner(row, 6)
+
 			local optBtn = new("TextButton", {
+				Text = "",
+				AutoButtonColor = false,
+				BackgroundTransparency = 1,
+				Size = UDim2.new(1, 0, 1, 0),
+				ZIndex = 101,
+				Parent = row,
+			})
+
+			new("TextLabel", {
 				Text = tostring(opt),
 				Font = Theme.Font,
 				TextSize = 13,
 				TextColor3 = Theme.Text,
 				BackgroundTransparency = 1,
-				Size = UDim2.new(1, 0, 0, ROW_HEIGHT),
+				TextXAlignment = Enum.TextXAlignment.Left,
+				Position = UDim2.fromOffset(10, 0),
+				Size = UDim2.new(1, -34, 1, 0),
 				ZIndex = 101,
-				Parent = list,
+				Parent = row,
 			})
-			optBtn.MouseEnter:Connect(function() tween(optBtn, { BackgroundTransparency = 0.85, BackgroundColor3 = Theme.Accent }, 0.1) end)
-			optBtn.MouseLeave:Connect(function() tween(optBtn, { BackgroundTransparency = 1 }, 0.1) end)
+
+			local check = new("ImageLabel", {
+				Image = Theme.CheckImage,
+				ImageColor3 = Theme.Accent,
+				BackgroundTransparency = 1,
+				Visible = (tostring(opt) == tostring(selectedValue)),
+				Size = UDim2.fromOffset(14, 14),
+				Position = UDim2.new(1, -24, 0.5, -7),
+				ZIndex = 101,
+				Parent = row,
+			})
+
+			optBtn.MouseEnter:Connect(function() tween(row, { BackgroundTransparency = 0.85, BackgroundColor3 = Theme.Accent }, 0.1) end)
+			optBtn.MouseLeave:Connect(function() tween(row, { BackgroundTransparency = 1 }, 0.1) end)
 			optBtn.MouseButton1Click:Connect(function()
+				selectedValue = opt
 				selectedLabel.Text = tostring(opt)
+				selectedLabel.TextColor3 = Theme.Accent
+				for _, r in ipairs(list:GetChildren()) do
+					if r:IsA("Frame") then
+						local c = r:FindFirstChildOfClass("ImageLabel")
+						if c then c.Visible = (r == row) end
+					end
+				end
 				closeDropdown()
 				local ok, err = pcall(callback, opt)
 				if not ok then warn("[Vibe] Dropdown callback error: " .. tostring(err)) end
@@ -874,16 +1140,20 @@ function Tab:Dropdown(config)
 		window.DropdownCatcher.Visible = true
 		window._closeOpenDropdown = closeDropdown
 
-		local target = math.min(#options, MAX_VISIBLE) * ROW_HEIGHT
-		tween(list, { Size = UDim2.new(0, card.AbsoluteSize.X, 0, target) }, 0.15)
+		local target = math.min(#options, MAX_VISIBLE) * ROW_HEIGHT + 8
+		tween(list, { Size = UDim2.new(0, card.AbsoluteSize.X, 0, target) }, 0.16, EASE_POP)
 	end)
 
 	if default then
-		local ok = pcall(callback, default)
+		pcall(callback, default)
 	end
 
 	return {
-		Set = function(_, value) selectedLabel.Text = tostring(value) end,
+		Set = function(_, value)
+			selectedValue = value
+			selectedLabel.Text = tostring(value)
+			selectedLabel.TextColor3 = Theme.Accent
+		end,
 		Refresh = function(_, newOptions)
 			options = newOptions
 			buildOptions(options)
@@ -902,7 +1172,7 @@ function Tab:Input(config)
 	local default = config.Default or ""
 	local callback = config.Callback or function() end
 
-	local card = baseCard(self.Page, 40)
+	local card = baseCard(self.Page, 42)
 
 	new("TextLabel", {
 		Text = text,
@@ -916,23 +1186,34 @@ function Tab:Input(config)
 		Parent = card,
 	})
 
+	local boxHolder = new("Frame", {
+		Size = UDim2.new(0.5, -12, 0, 30),
+		Position = UDim2.new(0.5, 0, 0.5, -15),
+		BackgroundColor3 = Theme.PanelLighter,
+		Parent = card,
+	})
+	corner(boxHolder, 7)
+	local boxStroke = stroke(boxHolder, Theme.Stroke, 1)
+
 	local box = new("TextBox", {
 		Text = default,
 		PlaceholderText = placeholder,
 		Font = Theme.Font,
 		TextSize = 13,
 		TextColor3 = Theme.Text,
-		PlaceholderColor3 = Theme.SubText,
-		BackgroundColor3 = Theme.PanelLight,
+		PlaceholderColor3 = Theme.Muted,
+		BackgroundTransparency = 1,
 		ClearTextOnFocus = false,
-		Size = UDim2.new(0.5, -12, 0, 28),
-		Position = UDim2.new(0.5, 0, 0.5, -14),
-		Parent = card,
+		Size = UDim2.new(1, 0, 1, 0),
+		Parent = boxHolder,
 	})
-	corner(box, 6)
 	padding(box, 8)
 
+	box.Focused:Connect(function()
+		tween(boxStroke, { Color = Theme.AccentB }, 0.12)
+	end)
 	box.FocusLost:Connect(function(enterPressed)
+		tween(boxStroke, { Color = Theme.Stroke }, 0.12)
 		local ok, err = pcall(callback, box.Text, enterPressed)
 		if not ok then warn("[Vibe] Input callback error: " .. tostring(err)) end
 	end)
@@ -953,7 +1234,7 @@ function Tab:Keybind(config)
 	local default = config.Default or Enum.KeyCode.F
 	local callback = config.Callback or function() end
 
-	local card = baseCard(self.Page, 40)
+	local card = baseCard(self.Page, 42)
 
 	new("TextLabel", {
 		Text = text,
@@ -972,12 +1253,14 @@ function Tab:Keybind(config)
 		Font = Theme.FontBold,
 		TextSize = 13,
 		TextColor3 = Theme.Accent,
-		BackgroundColor3 = Theme.PanelLight,
-		Size = UDim2.fromOffset(80, 28),
-		Position = UDim2.new(1, -92, 0.5, -14),
+		BackgroundColor3 = Theme.PanelLighter,
+		AutoButtonColor = false,
+		Size = UDim2.fromOffset(84, 30),
+		Position = UDim2.new(1, -96, 0.5, -15),
 		Parent = card,
 	})
-	corner(keyBtn, 6)
+	corner(keyBtn, 7)
+	stroke(keyBtn, Theme.Stroke, 1)
 
 	local currentKey = default
 	local listening = false
@@ -985,6 +1268,7 @@ function Tab:Keybind(config)
 	keyBtn.MouseButton1Click:Connect(function()
 		listening = true
 		keyBtn.Text = "..."
+		tween(keyBtn, { BackgroundColor3 = Theme.AccentDim }, 0.12)
 	end)
 
 	UserInputService.InputBegan:Connect(function(input, gpe)
@@ -992,7 +1276,10 @@ function Tab:Keybind(config)
 			currentKey = input.KeyCode
 			keyBtn.Text = currentKey.Name
 			listening = false
+			tween(keyBtn, { BackgroundColor3 = Theme.PanelLighter }, 0.15)
 		elseif not gpe and input.KeyCode == currentKey then
+			tween(keyBtn, { BackgroundColor3 = Theme.AccentDim }, 0.08)
+			task.delay(0.1, function() tween(keyBtn, { BackgroundColor3 = Theme.PanelLighter }, 0.18) end)
 			local ok, err = pcall(callback, currentKey)
 			if not ok then warn("[Vibe] Keybind callback error: " .. tostring(err)) end
 		end
