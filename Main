@@ -64,7 +64,6 @@ local Theme = {
 	FontSemi     = Enum.Font.GothamSemibold,
 
 	ShadowImage  = "rbxassetid://6014261993", -- soft 9-slice shadow
-	CheckImage   = "rbxassetid://6031094667", -- generic checkmark
 }
 
 --------------------------------------------------------------------
@@ -223,7 +222,6 @@ function Vibe:CreateWindow(config)
 		Position = UDim2.new(0.5, -290, 0.5, -190),
 		BackgroundColor3 = Theme.Background,
 		BorderSizePixel = 0,
-		ClipsDescendants = true,
 		Parent = screenGui,
 	})
 	corner(main, 12)
@@ -293,9 +291,9 @@ function Vibe:CreateWindow(config)
 	})
 
 	local closeBtn = new("TextButton", {
-		Text = "\226\156\149", -- ✕
+		Text = "X",
 		Font = Theme.FontBold,
-		TextSize = 15,
+		TextSize = 14,
 		TextColor3 = Theme.SubText,
 		BackgroundColor3 = Theme.PanelLight,
 		BackgroundTransparency = 1,
@@ -306,8 +304,7 @@ function Vibe:CreateWindow(config)
 	})
 	corner(closeBtn, 8)
 	closeBtn.MouseButton1Click:Connect(function()
-		tween(main, { Size = UDim2.fromOffset(main.Size.X.Offset, 0) }, 0.18)
-		task.delay(0.18, function() main.Visible = false; main.Size = UDim2.fromOffset(580, 380) end)
+		main.Visible = false
 	end)
 	closeBtn.MouseEnter:Connect(function()
 		tween(closeBtn, { BackgroundTransparency = 0, TextColor3 = Theme.Text, BackgroundColor3 = Theme.Bad }, 0.12)
@@ -327,13 +324,15 @@ function Vibe:CreateWindow(config)
 		BorderSizePixel = 0,
 		Parent = main,
 	})
-	-- hairline divider between sidebar and content
+	-- hairline divider between sidebar and content. NOTE: this is parented to
+	-- `main`, not `sidebar` — sidebar has a UIListLayout below, and anything
+	-- parented inside it gets swept into that vertical stack too.
 	new("Frame", {
-		Size = UDim2.new(0, 1, 1, 0),
-		Position = UDim2.new(1, -1, 0, 0),
+		Size = UDim2.new(0, 1, 1, -50),
+		Position = UDim2.new(0, 149, 0, 50),
 		BackgroundColor3 = Theme.StrokeSoft,
 		BorderSizePixel = 0,
-		Parent = sidebar,
+		Parent = main,
 	})
 
 	local tabList = new("UIListLayout", {
@@ -397,14 +396,7 @@ function Vibe:CreateWindow(config)
 	UserInputService.InputBegan:Connect(function(input, gpe)
 		if gpe then return end
 		if input.KeyCode == toggleKey or input.KeyCode == Enum.KeyCode.Delete then
-			if main.Visible then
-				tween(main, { Size = UDim2.fromOffset(580, 0) }, 0.16)
-				task.delay(0.16, function() main.Visible = false; main.Size = UDim2.fromOffset(580, 380) end)
-			else
-				main.Visible = true
-				main.Size = UDim2.fromOffset(580, 0)
-				tween(main, { Size = UDim2.fromOffset(580, 380) }, 0.2, EASE_POP)
-			end
+			main.Visible = not main.Visible
 		end
 	end)
 
@@ -1024,7 +1016,8 @@ function Tab:Dropdown(config)
 	})
 	corner(list, 9)
 	stroke(list, Theme.Stroke, 1)
-	addShadow(list, 0.55, 20)
+	local listShadow = addShadow(list, 0.55, 20)
+	listShadow.ZIndex = 1 -- must stay below the option rows (see buildOptions)
 	local listPad = padding(list, 4)
 	new("UIListLayout", {
 		Padding = UDim.new(0, 2),
@@ -1059,12 +1052,14 @@ function Tab:Dropdown(config)
 
 	local function buildOptions(opts)
 		for _, child in ipairs(list:GetChildren()) do
-			if child:IsA("TextButton") then child:Destroy() end
+			if child.Name == "OptionRow" then child:Destroy() end
 		end
 		for _, opt in ipairs(opts) do
 			local row = new("Frame", {
+				Name = "OptionRow",
 				Size = UDim2.new(1, 0, 0, ROW_HEIGHT),
 				BackgroundTransparency = 1,
+				ZIndex = 3, -- must stay above listShadow (ZIndex 1)
 				Parent = list,
 			})
 			corner(row, 6)
@@ -1074,7 +1069,7 @@ function Tab:Dropdown(config)
 				AutoButtonColor = false,
 				BackgroundTransparency = 1,
 				Size = UDim2.new(1, 0, 1, 0),
-				ZIndex = 101,
+				ZIndex = 4,
 				Parent = row,
 			})
 
@@ -1087,20 +1082,21 @@ function Tab:Dropdown(config)
 				TextXAlignment = Enum.TextXAlignment.Left,
 				Position = UDim2.fromOffset(10, 0),
 				Size = UDim2.new(1, -34, 1, 0),
-				ZIndex = 101,
+				ZIndex = 4,
 				Parent = row,
 			})
 
-			local check = new("ImageLabel", {
-				Image = Theme.CheckImage,
-				ImageColor3 = Theme.Accent,
-				BackgroundTransparency = 1,
+			-- plain color-filled dot instead of an image asset for the
+			-- "selected" mark, so it never depends on an asset loading
+			local check = new("Frame", {
+				BackgroundColor3 = Theme.Accent,
 				Visible = (tostring(opt) == tostring(selectedValue)),
-				Size = UDim2.fromOffset(14, 14),
-				Position = UDim2.new(1, -24, 0.5, -7),
-				ZIndex = 101,
+				Size = UDim2.fromOffset(6, 6),
+				Position = UDim2.new(1, -18, 0.5, -3),
+				ZIndex = 4,
 				Parent = row,
 			})
+			corner(check, 3)
 
 			optBtn.MouseEnter:Connect(function() tween(row, { BackgroundTransparency = 0.85, BackgroundColor3 = Theme.Accent }, 0.1) end)
 			optBtn.MouseLeave:Connect(function() tween(row, { BackgroundTransparency = 1 }, 0.1) end)
@@ -1110,7 +1106,7 @@ function Tab:Dropdown(config)
 				selectedLabel.TextColor3 = Theme.Accent
 				for _, r in ipairs(list:GetChildren()) do
 					if r:IsA("Frame") then
-						local c = r:FindFirstChildOfClass("ImageLabel")
+						local c = r:FindFirstChild("Frame")
 						if c then c.Visible = (r == row) end
 					end
 				end
