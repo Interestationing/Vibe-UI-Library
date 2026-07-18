@@ -1034,20 +1034,29 @@ function Tab:Dropdown(config)
 		if not open then return end
 		open = false
 		arrow.Text = "v"
-		tween(arrow, { Rotation = 0 }, 0.15)
-		tween(list, { Size = UDim2.new(0, list.AbsoluteSize.X, 0, 0) }, 0.15)
+		list.Visible = false
 		window.DropdownCatcher.Visible = false
 		window._closeOpenDropdown = nil
-		task.delay(0.16, function()
-			if not open then list.Visible = false end
-		end)
 	end
 
-	local function positionList()
+	local function openDropdown()
+		if window._closeOpenDropdown then
+			window._closeOpenDropdown()
+		end
+		open = true
 		local absPos = card.AbsolutePosition
 		local absSize = card.AbsoluteSize
-		list.Position = UDim2.fromOffset(absPos.X, absPos.Y + absSize.Y + 6)
-		list.Size = UDim2.new(0, absSize.X, 0, list.Size.Y.Offset)
+		local target = math.min(#options, MAX_VISIBLE) * ROW_HEIGHT + 8
+		local finalPos = UDim2.fromOffset(absPos.X, absPos.Y + absSize.Y + 6)
+
+		list.Size = UDim2.new(0, absSize.X, 0, target)
+		list.Position = finalPos - UDim2.fromOffset(0, 6)
+		list.Visible = true
+		arrow.Text = "^"
+		window.DropdownCatcher.Visible = true
+		window._closeOpenDropdown = closeDropdown
+
+		tween(list, { Position = finalPos }, 0.12) -- small cosmetic slide-in, size is already final
 	end
 
 	local function buildOptions(opts)
@@ -1122,22 +1131,9 @@ function Tab:Dropdown(config)
 	clickArea.MouseButton1Click:Connect(function()
 		if open then
 			closeDropdown()
-			return
+		else
+			openDropdown()
 		end
-		-- close any other dropdown that's currently open first
-		if window._closeOpenDropdown then
-			window._closeOpenDropdown()
-		end
-
-		open = true
-		positionList()
-		list.Visible = true
-		arrow.Text = "^"
-		window.DropdownCatcher.Visible = true
-		window._closeOpenDropdown = closeDropdown
-
-		local target = math.min(#options, MAX_VISIBLE) * ROW_HEIGHT + 8
-		tween(list, { Size = UDim2.new(0, card.AbsoluteSize.X, 0, target) }, 0.16, EASE_POP)
 	end)
 
 	if default then
